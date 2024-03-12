@@ -1,0 +1,182 @@
+Program.Sub.ScreenSU.Start
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+
+Variable.UDT.uSalesPerson.Define("SalesRepID",String)
+Variable.UDT.uSalesPerson.Define("SalesRepName",String)
+Variable.UDT.uSalesPerson.Define("SalesRepEmail",String)
+Variable.UDT.uSalesPerson.Define("IsCourierRunning",Long)
+Variable.uGlobal.uSalesPerson.Declare("uSalesPerson")
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+F.Intrinsic.Control.SetErrorHandler("Main_Err")
+F.Intrinsic.Control.ClearErrors
+
+'Quote 4632
+'06/20/2013
+'Email Sales Rep on NEW SO Header screen
+'Post Save hook 11872
+
+
+'corrected for Jay Lake by TRT on 8/4/16.
+'FW:GSRXPEQ010-52420160806-1GSRX
+
+V.Local.sError.Declare(String)
+V.Local.sSQL.Declare(String)
+V.Local.sOrderNo.Declare(String)
+V.Local.sSubject.Declare(String)
+V.Local.sBody.Declare(String)
+V.Local.sAttach.Declare(String)
+V.Local.sCallParams.Declare(String)
+V.Local.sParam.Declare(String)
+V.Local.sParamVal.Declare(String)
+V.uGlobal.uSalesPerson.Redim(0,0)
+V.Local.sFile.Declare(String)
+V.Local.sPath.Declare(String)
+V.Local.sSenderEmail.Declare(String)
+V.Local.sRecip.Declare(String)
+V.Local.bEx.declare(Boolean)
+V.Local.sRPTID.Declare(String)
+V.Local.sCustomer.Declare(String)
+V.Local.sCustomerEmail.Declare(String)
+V.Local.sCustomerName.Declare(String)
+
+F.ODBC.Connection!con.OpenConnection(V.Ambient.PDSN,V.Ambient.PUser,V.Ambient.PPass)
+F.Intrinsic.Control.If(V.Caller.Hook,=,11872)
+'	F.Intrinsic.Control.If(V.Caller.Switches,=,"N")
+		F.Intrinsic.Control.If(V.Passed.USERSAVE,=,"Y")
+
+			V.Local.sOrderNo.Set(V.Passed.000003)
+			V.uGlobal.uSalesPerson(0)!SalesRepName.Set(V.Passed.000030)
+			V.Local.sCustomer.Set(V.Passed.000006)
+	
+			'get sales person ID using the sales rep name
+			F.Intrinsic.String.Build("Select * From SALESPEOPLE Where Salesperson = '{0}'",V.uGlobal.uSalesPerson(0)!SalesRepName,V.Local.sSQL)
+			F.ODBC.Connection!con.OpenLocalRecordsetRO("rst",V.Local.sSQL)
+			F.Intrinsic.Control.If(V.ODBC.con!rst.EOF,=,False)
+				V.uGlobal.uSalesPerson(0)!SalesRepID.Set(V.ODBC.con!rst.FieldValTrim!SALESPERSON_CODE)
+			F.Intrinsic.Control.EndIf
+			F.ODBC.con!rst.Close
+			
+			'get sales rep email using sales rep id
+			F.Intrinsic.String.Build("Select * From SALESPEOPLE Where SALESPERSON_CODE = '{0}' AND KEY1 = 'AR2'",V.uGlobal.uSalesPerson(0)!SalesRepID,V.Local.sSQL)
+			F.ODBC.Connection!con.OpenLocalRecordsetRO("rst",V.Local.sSQL)
+			F.Intrinsic.Control.If(V.ODBC.con!rst.EOF,=,False)
+				V.uGlobal.uSalesPerson(0)!SalesRepEmail.Set(V.ODBC.con!rst.FieldValTrim!SALESPERSON)
+			F.Intrinsic.Control.EndIf
+			F.ODBC.con!rst.Close
+			
+			'Get Customer email
+			F.Intrinsic.String.Build("Select Email From V_CUSTOMER_SALES WHERE CUSTOMER = '{0}'",V.Local.sCustomer,V.Local.sSQL)
+			F.ODBC.Connection!con.OpenLocalRecordsetRO("rst",V.Local.sSQL)
+			
+			F.Intrinsic.Control.If(V.ODBC.con!rst.EOF,<>,True)
+				V.Local.sCustomerEmail.Set(V.ODBC.con!rst.FieldValTrim!Email)
+			F.Intrinsic.Control.EndIf
+			
+			F.ODBC.con!rst.Close
+			
+			'Get customer Name
+			F.Intrinsic.String.Build("SELECT NAME_CUSTOMER FROM V_CUSTOMER_MASTER WHERE CUSTOMER = '{0}'",V.Local.sCustomer,V.Local.sSQL)
+			F.ODBC.Connection!con.OpenLocalRecordsetRO("rst",V.Local.sSQL)
+			
+			F.Intrinsic.Control.If(V.ODBC.con!rst.EOF,<>,True)
+				V.Local.sCustomerName.Set(V.ODBC.con!rst.FieldValTrim!NAME_CUSTOMER)
+			F.Intrinsic.Control.EndIf
+			
+			F.ODBC.con!rst.Close
+			
+			'check if courier is running
+			f.Global.Messaging.IsCourierRunning(V.uGlobal.uSalesPerson(0)!IsCourierRunning)
+
+			'verify all fields are present
+			F.Intrinsic.Control.If(V.uGlobal.uSalesPerson(0)!SalesRepName.Trim,=,"")
+				F.Intrinsic.UI.Msgbox("Sales Rep Name was not found in the database.","Email Unsuccessful!")
+			F.Intrinsic.Control.ElseIf(V.uGlobal.uSalesPerson(0)!SalesRepID.Trim,=,"")
+				F.Intrinsic.UI.Msgbox("Sales Rep ID was not found in the database.","Email Unsuccessful!")
+			F.Intrinsic.Control.ElseIf(V.uGlobal.uSalesPerson(0)!SalesRepEmail.Trim,=,"")
+				F.Intrinsic.UI.Msgbox("Sales Rep Email was not found in the database.","Email Unsuccessful!")
+			F.Intrinsic.Control.ElseIf(V.uGlobal.uSalesPerson(0)!IsCourierRunning,=,0)
+				F.Intrinsic.UI.Msgbox("Courier is NOT running.","Email Unsuccessful!")
+			F.Intrinsic.Control.Else
+				'populate table BI_ACKNWLDGMNT
+				'pad order number
+				F.Intrinsic.String.LPad(V.Local.sOrderNo,"0",7,V.Local.sOrderNo)
+
+				F.Intrinsic.String.Concat(V.Local.sOrderNo,"!*!P!*! !*!|~|CRYSTAL-OVERRIDE|~|",V.Local.sCallParams)
+				F.Global.General.CallWrapperSync(910050,V.Local.sCallParams)
+				'save report as pdf
+
+				'have to get report id from table to be used by crystal just because
+				F.Intrinsic.String.Build("Select RPTID From V_BI_ACKNWLDGMNT WHERE TERMINAL = '{0}'",V.Caller.Terminal,V.Local.sSQL)
+				F.ODBC.Connection!con.OpenLocalRecordsetRO("rst",V.Local.sSQL)
+				F.Intrinsic.Control.If(V.ODBC.con!rst.EOF,=,True)
+					'information couldn't be found dont sent.
+					F.Intrinsic.UI.Msgbox("Table data could not be found. Please contact Global Shop. No Email was sent out.")
+					F.Intrinsic.Control.CallSub(Unload)
+				F.Intrinsic.Control.Else
+					V.Local.sRPTID.Set(V.ODBC.con!rst.FieldValTrim!RPTID)
+				F.Intrinsic.Control.Endif
+
+				F.ODBC.con!rst.Close
+
+				F.Intrinsic.String.Concat(V.Caller.PluginsDir,"\Orders\",V.Local.sOrderNo,".pdf",V.Local.sAttach)
+				V.Local.sParam.Set("Terminal*!*REPORTID*!*INCLUDESTAX*!*DEC*!*COMMENTS")
+				F.Intrinsic.String.Concat(V.Caller.Terminal,"*!*",V.Local.sRPTID,"*!**!**!*",V.Local.sParamVal)
+				F.Intrinsic.String.Split(V.Local.sParam,"*!*",V.Local.sParam)
+				F.Intrinsic.String.Split(V.Local.sParamVal,"*!*",V.Local.sParamVal)
+				F.Global.BI.SaveReport("000054",1,V.Local.sParam,V.Local.sParamVal,V.Local.sAttach)
+				'check if the pdf exists. 	
+				F.Intrinsic.File.Exists(V.Local.sAttach,V.Local.bEx)
+				F.Intrinsic.Control.If(V.Local.bEx,=,False)
+					'file didn't exist end.
+					F.Intrinsic.UI.Msgbox("Order Acknowledgement report could not be created. Please contact Global Shop regarding this project. No email will be sent.")
+					F.Intrinsic.Control.CallSub(Unload)
+				F.Intrinsic.Control.EndIf
+
+				'send email
+
+				F.Intrinsic.String.Concat("Order Acknowledgement for ",V.Passed.000007.Trim,V.Local.sSubject)
+				V.Local.sBody.Set("See Attached")
+				F.Intrinsic.String.Concat(V.Caller.PluginsDir,"\Orders\",V.Local.sPath)
+				F.Intrinsic.String.Concat(V.Local.sOrderNo,".pdf","*!*",V.local.sPath,V.Local.sPath)
+				
+			
+				F.Intrinsic.String.Concat(V.uGlobal.uSalesPerson(0)!SalesRepEmail,"*!*","Automated Email ",V.Passed.000007,V.Local.sSenderEmail)
+				F.Intrinsic.String.Concat(V.uGlobal.uSalesPerson(0)!SalesRepName,"*!*",V.uGlobal.uSalesPerson(0)!SalesREpEmail,"@!@",V.Local.sCustomerName,"*!*",V.Local.sCustomerEmail,V.Local.sRecip)
+'				F.Global.Messaging.QueueEMMessage(V.uGlobal.uSalesPerson(0)!SalesRepEmail,V.uGlobal.uSalesPerson(0)!SalesRepName,"sales@gearench.com",V.Passed.BILL-TO-NAME.Trim,V.Local.sSubject,V.Local.sBody,V.Local.sAttach,False)
+'				f.Global.Messaging.queueMessage(v.Caller.CompanyCode,v.Caller.User,v.Caller.Caller,v.Local.sSubject,"sales@gearrench.com*!*Sales",v.uGlobal.uSalesPerson(0)!SalesRepEmail,v.Local.sBody,-1,,"",False,"",,"","","","",v.Local.sPath,False)
+				F.Global.Messaging.QueueMessage(V.Caller.CompanyCode,0,V.Caller.Caller,V.Local.sSubject,V.Local.sSenderEmail,V.Local.sRecip,V.Local.sBody,0,"",False,"",,"","","","","",V.Local.spath,False)
+			F.Intrinsic.Control.EndIf
+
+		F.Intrinsic.Control.EndIf
+'	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.CallSub(Unload)
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Main_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_EMAIL_ACK.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.CallSub(Unload)
+	Function.Intrinsic.Control.EndIf
+
+
+Program.Sub.Main.End
+
+Program.Sub.Unload.Start
+F.ODBC.Connection!con.Close
+F.Intrinsic.Control.End
+
+Program.Sub.Unload.End
+
+Program.Sub.Comments.Start
+${$0$}$GCG_EMAIL_ACK$}$ERIC$}$6/18/2013$}$False
+${$3$}$0$}$$}$-1$}$-1$}$$}$1/1/1900$}$'Quote 4632
+Program.Sub.Comments.End
+
